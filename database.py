@@ -1,7 +1,7 @@
 import aiosqlite
 from datetime import datetime
 
-DB_NAME = "flashcards.db"
+DB_NAME = "data/flashcards.db"
 
 async def init_db():
     async with aiosqlite.connect(DB_NAME) as db:

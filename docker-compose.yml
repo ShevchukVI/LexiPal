@@ -1,0 +1,12 @@
+version: '3.8'
+
+services:
+  lexipal_bot:
+    build: .
+    container_name: lexipal
+    restart: unless-stopped
+    volumes:
+      # Зберігаємо базу даних поза контейнером, щоб не втратити прогрес при оновленнях
+      - ./data:/app/data
+    env_file:
+      - .env
