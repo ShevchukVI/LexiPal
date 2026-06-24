@@ -1,5 +1,7 @@
 import os
+import sys
 import asyncio
+import subprocess
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
@@ -12,14 +14,13 @@ import sm2
 
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID", 0))  # Твій ID для адмін-команд
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 
 # --- КЛАВІАТУРИ ---
-
-# Постійне нижнє меню
 def get_main_menu():
     return ReplyKeyboardMarkup(
         keyboard=[
@@ -27,7 +28,7 @@ def get_main_menu():
             [KeyboardButton(text="🔄 Синхронізація"), KeyboardButton(text="📊 Статистика")]
         ],
         resize_keyboard=True,
-        is_persistent=True  # Меню завжди видно
+        is_persistent=True
     )
 
 
@@ -54,24 +55,41 @@ def get_rating_kb(card_id: int, rep, ef, ivl):
 
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
-    await message.answer("Привіт! Я твій особистий Anki-бот.\nОбери дію в меню нижче 👇",
-                         reply_markup=get_main_menu())
+    await message.answer("Привіт! Я **LexiPal 🇬🇧** — твій особистий помічник для вивчення англійської.\n"
+                         "Обери дію в меню нижче 👇",
+                         reply_markup=get_main_menu(), parse_mode="Markdown")
 
 
-# Об'єднана синхронізація
+# --- АДМІНКА: АВТООНОВЛЕННЯ ---
+@dp.message(Command("update"))
+async def cmd_update(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        return  # Ігноруємо, якщо пише не адмін
+
+    msg = await message.answer("🔄 Завантажую оновлення з GitHub...")
+    try:
+        # Запускаємо git pull
+        result = subprocess.run(["git", "pull", "origin", "main"],
+                                capture_output=True, text=True, check=True)
+
+        await msg.edit_text(f"✅ Код успішно оновлено!\n\n`{result.stdout}`\n\n♻️ Перезапускаю LexiPal...",
+                            parse_mode="Markdown")
+
+        # Вбиваємо процес. Docker автоматично перезапустить його з новим кодом!
+        os._exit(0)
+    except Exception as e:
+        await msg.edit_text(f"❌ Помилка оновлення:\n`{e}`", parse_mode="Markdown")
+
+
+# --- СИНХРОНІЗАЦІЯ ---
 @dp.message(F.text == "🔄 Синхронізація")
 @dp.message(Command("sync"))
 async def cmd_sync_all(message: Message):
     msg = await message.answer("🔄 Шукаю нові слова в Obsidian та локальній базі...")
-
-    # 1. Скануємо Обсідіан
     cards_obsidian = await asyncio.to_thread(parser.parse_cloudflare_obsidian)
     added_obsidian = await database.add_cards_to_db(cards_obsidian) if cards_obsidian else 0
-
-    # 2. Скануємо CSV
     cards_csv = parser.parse_local_csv()
     added_csv = await database.add_cards_to_db(cards_csv) if cards_csv else 0
-
     total_added = added_obsidian + added_csv
 
     await msg.edit_text(f"✅ Синхронізацію завершено!\n\n"
@@ -82,25 +100,19 @@ async def cmd_sync_all(message: Message):
 
 async def send_next_card(user_id: int, message_or_call):
     card = await database.get_due_card(user_id)
-
-    # Якщо слів більше немає
     if not card:
         text = "🎉 На сьогодні все! Ти повторив(ла) всі слова.\nПовертайся завтра або натисни «Синхронізація»."
         if isinstance(message_or_call, Message):
             await message_or_call.answer(text, reply_markup=get_main_menu())
         else:
-            # ЗАМІНЮЄМО останню картку на цей текст, прибираючи кнопки
             await message_or_call.message.edit_text(text)
         return
 
-    # Якщо слово є
     text = f"🇬🇧 **{card['front']}**"
     kb = get_show_answer_kb(card['id'])
-
     if isinstance(message_or_call, Message):
         await message_or_call.answer(text, reply_markup=kb, parse_mode="Markdown")
     else:
-        # Замінюємо попереднє слово на нове
         await message_or_call.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
 
 
@@ -112,8 +124,7 @@ async def cmd_learn(message: Message):
 
 @dp.callback_query(F.data.startswith("show_"))
 async def show_answer(call: CallbackQuery):
-    await call.answer()  # Прибирає іконку завантаження на кнопці
-
+    await call.answer()
     card_id = int(call.data.split("_")[1])
     user_id = call.from_user.id
     card = await database.get_due_card(user_id)
@@ -129,18 +140,10 @@ async def show_answer(call: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("rate_"))
 async def rate_card(call: CallbackQuery):
-    await call.answer()  # Прибирає іконку завантаження
+    await call.answer()
     _, card_id, quality, rep, ef, ivl = call.data.split("_")
-
-    new_rep, new_ef, new_ivl, next_rev = sm2.calculate_next_review(
-        int(quality), int(rep), float(ef), int(ivl)
-    )
-
-    await database.update_card_progress(
-        call.from_user.id, int(card_id), new_rep, new_ef, new_ivl, next_rev
-    )
-
-    # Видаємо наступну картку (вона автоматично замінить поточну)
+    new_rep, new_ef, new_ivl, next_rev = sm2.calculate_next_review(int(quality), int(rep), float(ef), int(ivl))
+    await database.update_card_progress(call.from_user.id, int(card_id), new_rep, new_ef, new_ivl, next_rev)
     await send_next_card(call.from_user.id, call)
 
 
@@ -155,7 +158,7 @@ async def cmd_stats(message: Message):
 
 async def main():
     await database.init_db()
-    print("Бот запущено і готовий до роботи!")
+    print("LexiPal запущено і готово до роботи!")
     await dp.start_polling(bot)
 
 
