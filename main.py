@@ -62,6 +62,58 @@ async def cmd_start(message: Message):
                          reply_markup=get_main_menu(), parse_mode="Markdown")
 
 
+# --- ДОДАВАННЯ СЛІВ ЧЕРЕЗ ЧАТ ---
+@dp.message(F.text.lower().startswith("додай:") | F.text.lower().startswith("/add"))
+async def cmd_add_word(message: Message):
+    await bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
+
+    # Видаляємо слово "додай:" або "/add" з тексту
+    text = message.text
+    if text.lower().startswith("додай:"):
+        text = text[6:]
+    elif text.lower().startswith("/add"):
+        text = text[4:]
+
+    text = text.strip()
+
+    # Шукаємо роздільник (може бути тире, дефіс, двокрапка або ::)
+    if " - " in text:
+        parts = text.split(" - ", 1)
+    elif "-" in text:
+        parts = text.split("-", 1)
+    elif "::" in text:
+        parts = text.split("::", 1)
+    else:
+        await message.answer("❌ Неправильний формат.\nНапиши так: `додай: apple - яблуко`", parse_mode="Markdown")
+        return
+
+    front = parts[0].strip()
+    back = parts[1].strip()
+
+    if not front or not back:
+        await message.answer("❌ Забув(ла) написати слово або переклад.")
+        return
+
+    await database.add_single_card_and_link(message.from_user.id, front, back)
+    await message.answer(f"✅ Додано в твій словник:\n🇬🇧 **{front}** — 🇺🇦 {back}", parse_mode="Markdown")
+
+
+# --- СПИСОК СЛІВ ---
+@dp.message(Command("my_words"))
+async def cmd_my_words(message: Message):
+    await bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
+    words = await database.get_user_words(message.from_user.id)
+
+    if not words:
+        await message.answer("📭 Твій словник поки порожній. \nНапиши: `додай: слово - переклад`")
+        return
+
+    text = "📚 **Останні 50 твоїх слів:**\n\n"
+    for w in words:
+        text += f"▪️ {w[0]} — {w[1]}\n"
+
+    await message.answer(text, parse_mode="Markdown")
+
 # --- АДМІНКА: АВТООНОВЛЕННЯ ---
 @dp.message(Command("update"))
 async def cmd_update(message: Message):

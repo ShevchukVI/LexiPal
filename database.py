@@ -77,3 +77,41 @@ async def get_stats(user_id: int):
         async with db.execute('SELECT COUNT(*) FROM user_progress WHERE user_id = ? AND next_review <= ?', (user_id, now)) as cursor:
             due_today = (await cursor.fetchone())[0]
     return total_learned, due_today
+
+
+async def add_single_card_and_link(user_id: int, front: str, back: str):
+    """Додає одне слово і відразу прив'язує його до прогресу конкретного користувача"""
+    async with aiosqlite.connect(DB_NAME) as db:
+        # 1. Пробуємо додати слово в загальну базу карток
+        try:
+            cursor = await db.execute('INSERT INTO cards (front, back) VALUES (?, ?)', (front, back))
+            card_id = cursor.lastrowid
+        except aiosqlite.IntegrityError:
+            # Якщо слово вже є в базі, просто дістаємо його ID
+            cursor = await db.execute('SELECT id FROM cards WHERE front = ?', (front,))
+            card_id = (await cursor.fetchone())[0]
+
+        # 2. Робимо запис в user_progress з нульовим прогресом (щоб слово випало на вивчення)
+        try:
+            await db.execute('''
+                             INSERT INTO user_progress (user_id, card_id, repetitions, ease_factor, interval, next_review)
+                             VALUES (?, ?, 0, 2.5, 0, ?)
+                             ''', (user_id, card_id, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+        except aiosqlite.IntegrityError:
+            pass  # Якщо вона вже вчить це слово, нічого не робимо
+
+        await db.commit()
+    return True
+
+
+async def get_user_words(user_id: int):
+    """Повертає список слів, які користувач додав/вивчає"""
+    async with aiosqlite.connect(DB_NAME) as db:
+        async with db.execute('''
+                              SELECT c.front, c.back
+                              FROM cards c
+                                       JOIN user_progress up ON c.id = up.card_id
+                              WHERE up.user_id = ?
+                              ORDER BY up.next_review DESC LIMIT 50
+                              ''', (user_id,)) as cursor:
+            return await cursor.fetchall()
