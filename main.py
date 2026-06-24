@@ -19,6 +19,9 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
+# Запобіжник для фонової синхронізації
+is_syncing = False
+
 
 # --- КЛАВІАТУРИ ---
 
@@ -59,7 +62,12 @@ def get_collections_kb(decks: list):
 
 # --- ФОНОВА СИНХРОНІЗАЦІЯ ---
 async def background_sync():
-    """Фонова синхронізація без відправки повідомлень користувачу"""
+    """Фонова синхронізація без блокування бота"""
+    global is_syncing
+    if is_syncing:
+        return
+
+    is_syncing = True
     try:
         cards_obsidian = await asyncio.to_thread(parser.parse_cloudflare_obsidian)
         if cards_obsidian:
@@ -70,13 +78,15 @@ async def background_sync():
             await database.add_cards_to_deck(2, cards_csv)
     except Exception as e:
         print(f"Помилка фонової синхронізації: {e}")
+    finally:
+        is_syncing = False
 
 
 # --- ЛОГІКА ---
 
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
-    # Фоново синхронізуємо бази при старті
+    # Запускаємо фоново, миттєво відповідаємо
     asyncio.create_task(background_sync())
 
     await message.answer(
@@ -220,8 +230,8 @@ async def rate_card(call: CallbackQuery):
 async def cmd_stats(message: Message):
     await bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
 
-    # Перед тим як показати цифри, переконуємося, що бази завантажені
-    await background_sync()
+    # Запускаємо фоново, НЕ БЛОКУЄМО інтерфейс
+    asyncio.create_task(background_sync())
 
     total, due, active_total = await database.get_stats(message.from_user.id)
     await message.answer(f"📊 **Твоя статистика**\n\n"
