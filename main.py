@@ -57,10 +57,28 @@ def get_collections_kb(decks: list):
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
 
+# --- ФОНОВА СИНХРОНІЗАЦІЯ ---
+async def background_sync():
+    """Фонова синхронізація без відправки повідомлень користувачу"""
+    try:
+        cards_obsidian = await asyncio.to_thread(parser.parse_cloudflare_obsidian)
+        if cards_obsidian:
+            await database.add_cards_to_deck(1, cards_obsidian)
+
+        cards_csv = parser.parse_local_csv()
+        if cards_csv:
+            await database.add_cards_to_deck(2, cards_csv)
+    except Exception as e:
+        print(f"Помилка фонової синхронізації: {e}")
+
+
 # --- ЛОГІКА ---
 
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
+    # Фоново синхронізуємо бази при старті
+    asyncio.create_task(background_sync())
+
     await message.answer(
         "Привіт! Я **LexiPal 🇬🇧** — твій помічник для вивчення англійської.\nОбери дію в меню нижче 👇",
         reply_markup=get_main_menu(), parse_mode="Markdown")
@@ -94,7 +112,6 @@ async def cmd_collections(message: Message):
 async def toggle_collection(call: CallbackQuery):
     deck_id = int(call.data.split("_")[1])
     await database.toggle_deck_status(call.from_user.id, deck_id)
-    # Оновлюємо клавіатуру
     decks = await database.get_user_decks_status(call.from_user.id)
     await call.message.edit_reply_markup(reply_markup=get_collections_kb(decks))
     await call.answer("Статус змінено!")
@@ -202,6 +219,10 @@ async def rate_card(call: CallbackQuery):
 @dp.message(Command("stats"))
 async def cmd_stats(message: Message):
     await bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
+
+    # Перед тим як показати цифри, переконуємося, що бази завантажені
+    await background_sync()
+
     total, due, active_total = await database.get_stats(message.from_user.id)
     await message.answer(f"📊 **Твоя статистика**\n\n"
                          f"🗂 Слів у твоїх активних базах: {active_total}\n"
